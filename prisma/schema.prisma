@@ -1,0 +1,312 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String    @default("OPERATIONS_STAFF") // SUPER_ADMIN, BRANCH_ADMIN, OPERATIONS_STAFF
+  branchId     String?
+  phone        String?
+  status       String    @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  createdShipments    Shipment[]  @relation("ShipmentCreatedBy")
+  statusHistories     ShipmentStatusHistory[] @relation("StatusStaff")
+  createdManifests    Manifest[]  @relation("ManifestCreatedBy")
+  dispatchedManifests Manifest[]  @relation("ManifestDispatchedBy")
+  receivedManifests   Manifest[]  @relation("ManifestReceivedBy")
+  verifiedManifestShipments ManifestShipment[] @relation("ManifestShipmentVerifier")
+  releasedCollections Collection[] @relation("CollectionReleasedBy")
+  auditLogs           AuditLog[]  @relation("UserAuditLogs")
+
+  @@index([email])
+  @@index([branchId])
+}
+
+model Branch {
+  id        String    @id @default(uuid())
+  name      String
+  code      String    @unique // PHC, ABI
+  address   String
+  phone     String
+  email     String?
+  status    String    @default("ACTIVE") // ACTIVE, INACTIVE
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  users                 User[]
+  originShipments       Shipment[]  @relation("OriginBranchShipments")
+  destinationShipments  Shipment[]  @relation("DestinationBranchShipments")
+  originManifests       Manifest[]  @relation("OriginBranchManifests")
+  destinationManifests  Manifest[]  @relation("DestinationBranchManifests")
+  statusHistories       ShipmentStatusHistory[] @relation("StatusBranch")
+  collections           Collection[] @relation("BranchCollections")
+  auditLogs             AuditLog[]  @relation("BranchAuditLogs")
+
+  @@index([code])
+}
+
+model Customer {
+  id         String    @id @default(uuid())
+  fullName   String
+  phone      String
+  altPhone   String?
+  email      String?
+  address    String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  sentShipments     Shipment[] @relation("CustomerSender")
+  receivedShipments Shipment[] @relation("CustomerReceiver")
+
+  @@index([phone])
+  @@index([fullName])
+}
+
+model Shipment {
+  id                  String    @id @default(uuid())
+  waybillNumber       String    @unique // PTL-PHC-ABI-260912-0001
+  originBranchId      String
+  destinationBranchId String
+  senderId            String
+  receiverId          String
+  status              String    @default("AWAITING_DISPATCH") // CREATED, RECEIVED_AT_ORIGIN, AWAITING_DISPATCH, DISPATCHED, IN_TRANSIT, ARRIVED_AT_DESTINATION, READY_FOR_PICKUP, COLLECTED, ON_HOLD, RETURNED, CANCELLED
+  
+  parcelCategory      String    @default("General Parcel") // General Parcel, Documents, Electronics, Clothing, Food Items, Fragile, Other
+  description         String
+  packagesCount       Int       @default(1)
+  quantity            Int       @default(1)
+  weightKg            Float?
+  declaredValue       Float?
+  specialInstructions String?
+
+  transportCharge     Float     @default(0)
+  paymentStatus       String    @default("PAID") // PAID, UNPAID, PARTIALLY_PAID
+  paymentMethod       String    @default("CASH") // CASH, TRANSFER, POS, OTHER
+  amountPaid          Float     @default(0)
+  balanceAmount       Float     @default(0)
+
+  pickupCode          String?   // 6-digit secure code e.g. 583921
+  pickupCodeGeneratedAt DateTime?
+  currentBranchId     String?
+
+  createdById         String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  originBranch        Branch    @relation("OriginBranchShipments", fields: [originBranchId], references: [id])
+  destinationBranch   Branch    @relation("DestinationBranchShipments", fields: [destinationBranchId], references: [id])
+  sender              Customer  @relation("CustomerSender", fields: [senderId], references: [id])
+  receiver            Customer  @relation("CustomerReceiver", fields: [receiverId], references: [id])
+  createdBy           User      @relation("ShipmentCreatedBy", fields: [createdById], references: [id])
+
+  manifestShipments   ManifestShipment[]
+  statusHistory       ShipmentStatusHistory[]
+  collection          Collection?
+  notifications       Notification[]
+  pickupVerifications PickupVerification[]
+  payments            Payment[]
+
+  @@index([waybillNumber])
+  @@index([originBranchId])
+  @@index([destinationBranchId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ShipmentStatusHistory {
+  id         String    @id @default(uuid())
+  shipmentId String
+  status     String
+  branchId   String?
+  staffId    String?
+  remarks    String?
+  createdAt  DateTime  @default(now())
+
+  shipment   Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  branch     Branch?   @relation("StatusBranch", fields: [branchId], references: [id])
+  staff      User?     @relation("StatusStaff", fields: [staffId], references: [id])
+
+  @@index([shipmentId])
+}
+
+model Manifest {
+  id                  String    @id @default(uuid())
+  manifestNumber      String    @unique // MAN-PHC-ABI-260912-001
+  originBranchId      String
+  destinationBranchId String
+  status              String    @default("DRAFT") // DRAFT, READY_FOR_DISPATCH, DISPATCHED, IN_TRANSIT, RECEIVED, CLOSED
+  
+  driverName          String?
+  vehicleReg          String?
+  driverPhone         String?
+  notes               String?
+  totalParcels        Int       @default(0)
+
+  createdById         String
+  dispatchedAt        DateTime?
+  dispatchedById      String?
+  receivedAt          DateTime?
+  receivedById        String?
+  receivingRemarks    String?
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  originBranch        Branch    @relation("OriginBranchManifests", fields: [originBranchId], references: [id])
+  destinationBranch   Branch    @relation("DestinationBranchManifests", fields: [destinationBranchId], references: [id])
+  createdBy           User      @relation("ManifestCreatedBy", fields: [createdById], references: [id])
+  dispatchedBy        User?     @relation("ManifestDispatchedBy", fields: [dispatchedById], references: [id])
+  receivedBy          User?     @relation("ManifestReceivedBy", fields: [receivedById], references: [id])
+
+  manifestShipments   ManifestShipment[]
+
+  @@index([manifestNumber])
+  @@index([originBranchId])
+  @@index([destinationBranchId])
+  @@index([status])
+}
+
+model ManifestShipment {
+  id               String    @id @default(uuid())
+  manifestId       String
+  shipmentId       String
+  receivingStatus  String    @default("PENDING") // PENDING, RECEIVED, MISSING, DAMAGED, ON_HOLD
+  receivingRemarks String?
+  verifiedAt       DateTime?
+  verifiedById     String?
+
+  manifest         Manifest  @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+  shipment         Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  verifiedBy       User?     @relation("ManifestShipmentVerifier", fields: [verifiedById], references: [id])
+
+  @@unique([manifestId, shipmentId])
+  @@index([manifestId])
+  @@index([shipmentId])
+}
+
+model PickupVerification {
+  id           String    @id @default(uuid())
+  shipmentId   String
+  pickupCode   String
+  attempts     Int       @default(0)
+  isVerified   Boolean   @default(false)
+  verifiedAt   DateTime?
+  verifiedById String?
+
+  shipment     Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId])
+}
+
+model Collection {
+  id                 String    @id @default(uuid())
+  shipmentId         String    @unique
+  collectorName      String
+  collectorPhone     String
+  relationship       String    @default("SELF") // SELF, SPOUSE, COLLEAGUE, RELATIVE, AGENT, OTHER
+  verificationMethod String    @default("PICKUP_CODE") // PICKUP_CODE, ID_VERIFICATION, ADMIN_OVERRIDE
+  pickupCodeVerified Boolean   @default(true)
+  idType             String?   // NATIONAL_ID, DRIVERS_LICENSE, VOTERS_CARD, PASSPORT, OTHER
+  idReference        String?
+  releasedById       String
+  branchId           String
+  remarks            String?
+  collectionDate     DateTime  @default(now())
+
+  shipment           Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  releasedBy         User      @relation("CollectionReleasedBy", fields: [releasedById], references: [id])
+  branch             Branch    @relation("BranchCollections", fields: [branchId], references: [id])
+
+  @@index([shipmentId])
+  @@index([branchId])
+}
+
+model Payment {
+  id            String    @id @default(uuid())
+  shipmentId    String
+  amount        Float
+  paymentMethod String    @default("CASH") // CASH, TRANSFER, POS, OTHER
+  paymentStatus String    @default("PAID") // PAID, PARTIAL, REFUNDED
+  reference     String?
+  recordedById  String
+  createdAt     DateTime  @default(now())
+
+  shipment      Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId])
+}
+
+model Notification {
+  id             String    @id @default(uuid())
+  shipmentId     String
+  recipientPhone String
+  recipientName  String
+  channel        String    @default("SMS") // SMS, WHATSAPP, EMAIL, MANUAL
+  message        String
+  sentAt         DateTime  @default(now())
+  deliveryStatus String    @default("SENT") // SENT, DELIVERED, PENDING, FAILED
+
+  shipment       Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId])
+}
+
+model AuditLog {
+  id            String    @id @default(uuid())
+  userId        String?
+  userName      String?
+  userEmail     String?
+  userRole      String?
+  action        String    // LOGIN, WAYBILL_CREATED, MANIFEST_DISPATCHED, COLLECTION_CONFIRMED, etc.
+  entityType    String    // SHIPMENT, MANIFEST, COLLECTION, BRANCH, USER, SETTING
+  entityId      String
+  branchId      String?
+  branchCode    String?
+  details       String?
+  previousValue String?
+  newValue      String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+
+  user          User?     @relation("UserAuditLogs", fields: [userId], references: [id])
+  branch        Branch?   @relation("BranchAuditLogs", fields: [branchId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
+
+model SequenceCounter {
+  id            String   @id @default(uuid())
+  type          String   // WAYBILL, MANIFEST
+  prefix        String   // e.g. "PTL-PHC-ABI-260912" or "MAN-PHC-ABI-260912"
+  currentNumber Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([type, prefix])
+}
