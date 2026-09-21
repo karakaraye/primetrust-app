@@ -71,8 +71,47 @@ export async function POST(req: Request) {
     });
   } catch (error: any) {
     console.error("Login API error:", error);
+    
+    // Check for Prisma/Database specific errors
+    const errorMsg = error?.message || "";
+    const errorCode = error?.code || "";
+
+    if (errorCode === "P1001" || errorMsg.includes("Can't reach database server") || errorMsg.includes("connect ECONNREFUSED")) {
+      return NextResponse.json(
+        { 
+          error: "Unable to connect to the database. Please verify your Supabase DATABASE_URL in Vercel Environment Variables.",
+          code: "DB_CONNECTION_FAILED",
+          details: errorMsg
+        },
+        { status: 503 }
+      );
+    }
+
+    if (errorCode === "P1000" || errorMsg.includes("Authentication failed")) {
+      return NextResponse.json(
+        { 
+          error: "Database authentication failed. Please check your Supabase database password in DATABASE_URL.",
+          code: "DB_AUTH_FAILED"
+        },
+        { status: 503 }
+      );
+    }
+
+    if (errorCode === "P2021" || errorMsg.includes("does not exist")) {
+      return NextResponse.json(
+        { 
+          error: "Database tables not initialized. Please run the SQL schema in your Supabase SQL Editor.",
+          code: "DB_TABLES_MISSING"
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
-      { error: "An unexpected error occurred during login." },
+      { 
+        error: error?.message || "An unexpected error occurred during login.",
+        code: errorCode || "INTERNAL_ERROR"
+      },
       { status: 500 }
     );
   }

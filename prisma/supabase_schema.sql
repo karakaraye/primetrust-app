@@ -256,3 +256,53 @@ CREATE TABLE IF NOT EXISTS "SequenceCounter" (
     "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "uq_sequence_type_prefix" UNIQUE ("type", "prefix")
 );
+
+-- ====================================================================
+-- SEED INITIAL DATA (Branches, System Settings & Staff Accounts)
+-- Default password for all seed accounts: password123
+-- ====================================================================
+
+-- 1. Insert Branches
+INSERT INTO "Branch" ("id", "name", "code", "address", "phone", "email", "status", "createdAt", "updatedAt")
+VALUES
+    ('branch-phc-01', 'Port Harcourt Office', 'PHC', 'Plot 14 Aba Road, Rumuokwuta, Port Harcourt, Rivers State', '+234 803 111 2233', 'phc@logisticsops.ng', 'ACTIVE', NOW(), NOW()),
+    ('branch-abi-01', 'Abia Office', 'ABI', '58 Factory Road, Commercial Layout, Aba, Abia State', '+234 802 444 5566', 'abi@logisticsops.ng', 'ACTIVE', NOW(), NOW())
+ON CONFLICT ("code") DO UPDATE SET
+    "name" = EXCLUDED."name",
+    "address" = EXCLUDED."address",
+    "phone" = EXCLUDED."phone",
+    "email" = EXCLUDED."email",
+    "status" = EXCLUDED."status";
+
+-- 2. Insert Default Staff Users (Password Hash for 'password123': $2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy)
+INSERT INTO "User" ("id", "name", "email", "passwordHash", "role", "branchId", "phone", "status", "createdAt", "updatedAt")
+VALUES
+    ('user-admin-01', 'Emeka Okafor', 'admin@logisticsops.ng', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'SUPER_ADMIN', 'branch-phc-01', '+234 803 999 0001', 'ACTIVE', NOW(), NOW()),
+    ('user-admin-02', 'System Administrator', 'admin@primetrust.com', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'SUPER_ADMIN', 'branch-phc-01', '+234 800 000 0000', 'ACTIVE', NOW(), NOW()),
+    ('user-phc-admin', 'Tamuno Briggs', 'phc.admin@logisticsops.ng', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'BRANCH_ADMIN', 'branch-phc-01', '+234 803 999 0002', 'ACTIVE', NOW(), NOW()),
+    ('user-phc-staff', 'Chidiebere Nwosu', 'phc.staff@logisticsops.ng', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'OPERATIONS_STAFF', 'branch-phc-01', '+234 803 999 0003', 'ACTIVE', NOW(), NOW()),
+    ('user-abi-admin', 'Ngozi Ebere', 'abi.admin@logisticsops.ng', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'BRANCH_ADMIN', 'branch-abi-01', '+234 802 888 0001', 'ACTIVE', NOW(), NOW()),
+    ('user-abi-staff', 'Kalu Uzor', 'abi.staff@logisticsops.ng', '$2a$10$mXmxnd2FFrxMxblqpPeLuOYpaqtupGDO0ZwAdqBLhazJqUmm2wlfy', 'OPERATIONS_STAFF', 'branch-abi-01', '+234 802 888 0002', 'ACTIVE', NOW(), NOW())
+ON CONFLICT ("email") DO UPDATE SET
+    "name" = EXCLUDED."name",
+    "passwordHash" = EXCLUDED."passwordHash",
+    "role" = EXCLUDED."role",
+    "branchId" = EXCLUDED."branchId",
+    "status" = EXCLUDED."status";
+
+-- 3. Insert System Settings
+INSERT INTO "SystemSetting" ("id", "key", "value", "description", "updatedAt")
+VALUES
+    ('set-01', 'COMPANY_NAME', 'LOGISTICS OPERATIONS SYSTEM', 'Official display company name', NOW()),
+    ('set-02', 'COMPANY_CODE', 'PTL', 'Default company code prefix for waybills', NOW()),
+    ('set-03', 'COMPANY_PHONE', '+234 800 564 4784', 'Customer care line', NOW()),
+    ('set-04', 'COMPANY_EMAIL', 'operations@logisticsops.ng', 'Operations contact email', NOW()),
+    ('set-05', 'COMPANY_ADDRESS', 'Head Office: Plot 14 Aba Road, Port Harcourt, Rivers State', 'Head office address', NOW()),
+    ('set-06', 'CURRENCY_SYMBOL', '₦', 'Currency display symbol', NOW()),
+    ('set-07', 'WAYBILL_TERMS', '1. All parcels are received in apparent good condition unless noted. 2. Company liability is strictly limited to verified declared value. 3. Parcels not collected within 14 calendar days from arrival date will incur statutory demurrage fees. 4. Valid government identification or secret pickup code is required for parcel release.', 'Standard terms printed on waybills', NOW()),
+    ('set-08', 'NOTIFICATION_TEMPLATE', 'Your parcel with waybill {{waybillNumber}} from {{originBranch}} has arrived at our {{destinationBranch}} office and is ready for collection. Pickup Code: {{pickupCode}}. Please present this message at the counter.', 'Default SMS notification template', NOW())
+ON CONFLICT ("key") DO UPDATE SET
+    "value" = EXCLUDED."value",
+    "description" = EXCLUDED."description",
+    "updatedAt" = NOW();
+
