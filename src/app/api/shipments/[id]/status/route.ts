@@ -35,27 +35,33 @@ export async function PATCH(
     }
 
     // Update inside transaction
-    const updated = await db.$transaction(async (tx) => {
-      const s = await tx.shipment.update({
-        where: { id: shipment.id },
-        data: {
-          status,
-          currentBranchId: user.branchId || shipment.currentBranchId,
-        },
-      });
+    const updated = await db.$transaction(
+      async (tx) => {
+        const s = await tx.shipment.update({
+          where: { id: shipment.id },
+          data: {
+            status,
+            currentBranchId: user.branchId || shipment.currentBranchId,
+          },
+        });
 
-      await tx.shipmentStatusHistory.create({
-        data: {
-          shipmentId: shipment.id,
-          status,
-          branchId: user.branchId || null,
-          staffId: user.userId,
-          remarks: remarks || `Status transitioned to ${status} by ${user.name}`,
-        },
-      });
+        await tx.shipmentStatusHistory.create({
+          data: {
+            shipmentId: shipment.id,
+            status,
+            branchId: user.branchId || null,
+            staffId: user.userId,
+            remarks: remarks || `Status transitioned to ${status} by ${user.name}`,
+          },
+        });
 
-      return s;
-    });
+        return s;
+      },
+      {
+        maxWait: 10000,
+        timeout: 30000,
+      }
+    );
 
     // Audit log
     await logAudit({

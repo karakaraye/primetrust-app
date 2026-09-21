@@ -85,53 +85,63 @@ export async function POST(req: Request) {
 
     const manifestNumber = await generateManifestNumber(originBranch.code, destinationBranch.code);
 
-    const manifest = await db.$transaction(async (tx) => {
-      const created = await tx.manifest.create({
-        data: {
-          manifestNumber,
-          originBranchId: originBranch.id,
-          destinationBranchId: destinationBranch.id,
-          status: "IN_TRANSIT",
-          dispatchedAt: new Date(),
-          dispatchedById: user.userId,
-          driverName: driverName?.trim() || null,
-          vehicleReg: vehicleReg?.trim() || null,
-          driverPhone: driverPhone?.trim() || null,
-          notes: notes?.trim() || null,
-          totalParcels: eligibleShipments.length,
-          createdById: user.userId,
-        },
-      });
-
-      // Link shipments to manifest and update each parcel to IN_TRANSIT
-      for (const s of eligibleShipments) {
-        await tx.manifestShipment.create({
+    const manifest = await db.$transaction(
+      async (tx) => {
+        const created = await tx.manifest.create({
           data: {
-            manifestId: created.id,
-            shipmentId: s.id,
-            receivingStatus: "PENDING",
+            manifestNumber,
+            originBranchId: originBranch.id,
+            destinationBranchId: destinationBranch.id,
+            status: "IN_TRANSIT",
+            dispatchedAt: new Date(),
+            dispatchedById: user.userId,
+            driverName: driverName?.trim() || null,
+            vehicleReg: vehicleReg?.trim() || null,
+            driverPhone: driverPhone?.trim() || null,
+            notes: notes?.trim() || null,
+            totalParcels: eligibleShipments.length,
+            createdById: user.userId,
           },
         });
 
-        // Update shipment status to IN_TRANSIT
-        await tx.shipment.update({
-          where: { id: s.id },
+        // Link shipments to manifest in batch
+        const msData = eligibleShipments.map((s) => ({
+          manifestId: created.id,
+          shipmentId: s.id,
+          receivingStatus: "PENDING",
+        }));
+
+        await tx.manifestShipment.createMany({
+          data: msData,
+        });
+
+        // Update all shipments to IN_TRANSIT in one query
+        const shipmentIdsList = eligibleShipments.map((s) => s.id);
+        await tx.shipment.updateMany({
+          where: { id: { in: shipmentIdsList } },
           data: { status: "IN_TRANSIT" },
         });
 
-        await tx.shipmentStatusHistory.create({
-          data: {
-            shipmentId: s.id,
-            status: "IN_TRANSIT",
-            branchId: originBranch.id,
-            staffId: user.userId,
-            remarks: `Dispatched from ${originBranch.name} to ${destinationBranch.name} on manifest ${manifestNumber}`,
-          },
-        });
-      }
+        // Batch status histories
+        const histories = eligibleShipments.map((s) => ({
+          shipmentId: s.id,
+          status: "IN_TRANSIT",
+          branchId: originBranch.id,
+          staffId: user.userId,
+          remarks: `Dispatched from ${originBranch.name} to ${destinationBranch.name} on manifest ${manifestNumber}`,
+        }));
 
-      return created;
-    });
+        await tx.shipmentStatusHistory.createMany({
+          data: histories,
+        });
+
+        return created;
+      },
+      {
+        maxWait: 15000,
+        timeout: 60000,
+      }
+    );
 
     await logAudit({
       user,

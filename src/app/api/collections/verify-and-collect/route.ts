@@ -91,56 +91,62 @@ export async function POST(req: Request) {
 
     const effectiveBranchId = user.branchId || shipment.destinationBranchId;
 
-    const result = await db.$transaction(async (tx) => {
-      // 1. Create Collection record
-      const col = await tx.collection.create({
-        data: {
-          shipmentId: shipment.id,
-          collectorName: collectorName.trim(),
-          collectorPhone: collectorPhone.trim(),
-          relationship,
-          verificationMethod,
-          pickupCodeVerified,
-          idType: idType || null,
-          idReference: idReference?.trim() || null,
-          releasedById: user.userId,
-          branchId: effectiveBranchId,
-          remarks: remarks?.trim() || null,
-          collectionDate: new Date(),
-        },
-      });
+    const result = await db.$transaction(
+      async (tx) => {
+        // 1. Create Collection record
+        const col = await tx.collection.create({
+          data: {
+            shipmentId: shipment.id,
+            collectorName: collectorName.trim(),
+            collectorPhone: collectorPhone.trim(),
+            relationship,
+            verificationMethod,
+            pickupCodeVerified,
+            idType: idType || null,
+            idReference: idReference?.trim() || null,
+            releasedById: user.userId,
+            branchId: effectiveBranchId,
+            remarks: remarks?.trim() || null,
+            collectionDate: new Date(),
+          },
+        });
 
-      // 2. Update Shipment Status to COLLECTED
-      const updatedShipment = await tx.shipment.update({
-        where: { id: shipment.id },
-        data: {
-          status: "COLLECTED",
-        },
-      });
+        // 2. Update Shipment Status to COLLECTED
+        const updatedShipment = await tx.shipment.update({
+          where: { id: shipment.id },
+          data: {
+            status: "COLLECTED",
+          },
+        });
 
-      // 3. Mark verification as verified
-      await tx.pickupVerification.updateMany({
-        where: { shipmentId: shipment.id },
-        data: {
-          isVerified: true,
-          verifiedAt: new Date(),
-          verifiedById: user.userId,
-        },
-      });
+        // 3. Mark verification as verified
+        await tx.pickupVerification.updateMany({
+          where: { shipmentId: shipment.id },
+          data: {
+            isVerified: true,
+            verifiedAt: new Date(),
+            verifiedById: user.userId,
+          },
+        });
 
-      // 4. Status History
-      await tx.shipmentStatusHistory.create({
-        data: {
-          shipmentId: shipment.id,
-          status: "COLLECTED",
-          branchId: effectiveBranchId,
-          staffId: user.userId,
-          remarks: `Parcel released to ${collectorName} (${relationship}) via ${verificationMethod}. Released by ${user.name}.`,
-        },
-      });
+        // 4. Status History
+        await tx.shipmentStatusHistory.create({
+          data: {
+            shipmentId: shipment.id,
+            status: "COLLECTED",
+            branchId: effectiveBranchId,
+            staffId: user.userId,
+            remarks: `Parcel released to ${collectorName} (${relationship}) via ${verificationMethod}. Released by ${user.name}.`,
+          },
+        });
 
-      return { collection: col, shipment: updatedShipment };
-    });
+        return { collection: col, shipment: updatedShipment };
+      },
+      {
+        maxWait: 15000,
+        timeout: 30000,
+      }
+    );
 
     await logAudit({
       user,

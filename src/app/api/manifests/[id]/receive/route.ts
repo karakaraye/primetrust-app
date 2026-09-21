@@ -50,161 +50,200 @@ export async function POST(
 
     const notificationsToDispatch: Array<{ phone: string; message: string }> = [];
 
-    const updated = await db.$transaction(async (tx) => {
-      // 1. Process each shipment in the manifest
-      for (const ms of manifest.manifestShipments) {
-        const itemVerification = verificationMap.get(ms.shipmentId) || {
-          status: "RECEIVED",
-          remarks: "Verified during manifest arrival",
-        };
+    // Pre-calculate all data and updates before starting transaction
+    const now = new Date();
+    const manifestShipmentUpdates: Array<{ where: { id: string }; data: any }> = [];
+    const shipmentUpdates: Array<{ where: { id: string }; data: any }> = [];
+    const pickupVerificationsToCreate: Array<{
+      shipmentId: string;
+      pickupCode: string;
+      attempts: number;
+      isVerified: boolean;
+    }> = [];
+    const notificationsToCreate: Array<{
+      shipmentId: string;
+      recipientPhone: string;
+      recipientName: string;
+      channel: string;
+      message: string;
+      deliveryStatus: string;
+      sentAt: Date;
+    }> = [];
+    const statusHistoriesToCreate: Array<{
+      shipmentId: string;
+      status: string;
+      branchId?: string;
+      staffId: string;
+      remarks: string;
+    }> = [];
 
-        const recStatus = itemVerification.status; // RECEIVED, MISSING, DAMAGED, ON_HOLD
-        const remarks = itemVerification.remarks;
+    for (const ms of manifest.manifestShipments) {
+      const itemVerification = verificationMap.get(ms.shipmentId) || {
+        status: "RECEIVED",
+        remarks: "Verified during manifest arrival",
+      };
 
-        // Update ManifestShipment
-        await tx.manifestShipment.update({
-          where: { id: ms.id },
-          data: {
-            receivingStatus: recStatus,
-            receivingRemarks: remarks,
-            verifiedAt: new Date(),
-            verifiedById: user.userId,
-          },
-        });
+      const recStatus = itemVerification.status; // RECEIVED, MISSING, DAMAGED, ON_HOLD
+      const remarks = itemVerification.remarks;
 
-        if (recStatus === "RECEIVED") {
-          // Generate 6-digit pickup code
-          const pickupCode = ms.shipment.pickupCode || generatePickupCode();
-
-          await tx.shipment.update({
-            where: { id: ms.shipmentId },
-            data: {
-              status: "READY_FOR_PICKUP",
-              currentBranchId: manifest.destinationBranchId,
-              pickupCode,
-              pickupCodeGeneratedAt: new Date(),
-            },
-          });
-
-          await tx.pickupVerification.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              pickupCode,
-              attempts: 0,
-              isVerified: false,
-            },
-          });
-
-          // Compose customer SMS notification
-          const notifMessage = `Your parcel with Waybill ${ms.shipment.waybillNumber} from ${manifest.originBranch.name} has arrived at our ${manifest.destinationBranch.name} office (${manifest.destinationBranch.address}) and is ready for collection. Your Secret Pickup PIN is: ${pickupCode}. Present this PIN & valid ID at the counter for collection. Station Tel: ${manifest.destinationBranch.phone}.`;
-
-          await tx.notification.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              recipientPhone: ms.shipment.receiver.phone,
-              recipientName: ms.shipment.receiver.fullName,
-              channel: "SMS",
-              message: notifMessage,
-              deliveryStatus: "SENT",
-              sentAt: new Date(),
-            },
-          });
-
-          notificationsToDispatch.push({
-            phone: ms.shipment.receiver.phone,
-            message: notifMessage,
-          });
-
-          // Log status histories
-          await tx.shipmentStatusHistory.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              status: "ARRIVED_AT_DESTINATION",
-              branchId: manifest.destinationBranchId,
-              staffId: user.userId,
-              remarks: `Arrived and inspected at ${manifest.destinationBranch.name}. ${remarks || "Condition: Intact"}`,
-            },
-          });
-
-          await tx.shipmentStatusHistory.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              status: "READY_FOR_PICKUP",
-              branchId: manifest.destinationBranchId,
-              staffId: user.userId,
-              remarks: `Automated Arrival SMS dispatched to customer (${ms.shipment.receiver.phone}) with Secret Pickup PIN: ${pickupCode}`,
-            },
-          });
-        } else if (recStatus === "DAMAGED") {
-          await tx.shipment.update({
-            where: { id: ms.shipmentId },
-            data: {
-              status: "ON_HOLD",
-              currentBranchId: manifest.destinationBranchId,
-            },
-          });
-
-          await tx.shipmentStatusHistory.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              status: "ON_HOLD",
-              branchId: manifest.destinationBranchId,
-              staffId: user.userId,
-              remarks: `⚠️ PARCEL DAMAGED: Arrived with damage at ${manifest.destinationBranch.name}. Placed on hold for inspection. Remarks: ${remarks || "No details provided"}`,
-            },
-          });
-        } else if (recStatus === "MISSING") {
-          await tx.shipment.update({
-            where: { id: ms.shipmentId },
-            data: {
-              status: "ON_HOLD",
-            },
-          });
-
-          await tx.shipmentStatusHistory.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              status: "ON_HOLD",
-              branchId: manifest.destinationBranchId,
-              staffId: user.userId,
-              remarks: `🚨 PARCEL MISSING: Not found during arrival unloading of manifest ${manifest.manifestNumber}. Remarks: ${remarks || "Discrepancy noted"}`,
-            },
-          });
-        } else {
-          // ON_HOLD
-          await tx.shipment.update({
-            where: { id: ms.shipmentId },
-            data: {
-              status: "ON_HOLD",
-              currentBranchId: manifest.destinationBranchId,
-            },
-          });
-
-          await tx.shipmentStatusHistory.create({
-            data: {
-              shipmentId: ms.shipmentId,
-              status: "ON_HOLD",
-              branchId: manifest.destinationBranchId,
-              staffId: user.userId,
-              remarks: `Parcel held on arrival: ${remarks || "Pending verification"}`,
-            },
-          });
-        }
-      }
-
-      // 2. Update Manifest
-      const m = await tx.manifest.update({
-        where: { id: manifest.id },
+      // ManifestShipment update item
+      manifestShipmentUpdates.push({
+        where: { id: ms.id },
         data: {
-          status: "RECEIVED",
-          receivedAt: new Date(),
-          receivedById: user.userId,
-          receivingRemarks: receivingRemarks?.trim() || "Manifest received and inspected.",
+          receivingStatus: recStatus,
+          receivingRemarks: remarks,
+          verifiedAt: now,
+          verifiedById: user.userId,
         },
       });
 
-      return m;
-    });
+      if (recStatus === "RECEIVED") {
+        const pickupCode = ms.shipment.pickupCode || generatePickupCode();
+
+        shipmentUpdates.push({
+          where: { id: ms.shipmentId },
+          data: {
+            status: "READY_FOR_PICKUP",
+            currentBranchId: manifest.destinationBranchId,
+            pickupCode,
+            pickupCodeGeneratedAt: now,
+          },
+        });
+
+        pickupVerificationsToCreate.push({
+          shipmentId: ms.shipmentId,
+          pickupCode,
+          attempts: 0,
+          isVerified: false,
+        });
+
+        const notifMessage = `Your parcel with Waybill ${ms.shipment.waybillNumber} from ${manifest.originBranch.name} has arrived at our ${manifest.destinationBranch.name} office (${manifest.destinationBranch.address}) and is ready for collection. Your Secret Pickup PIN is: ${pickupCode}. Present this PIN & valid ID at the counter for collection. Station Tel: ${manifest.destinationBranch.phone}.`;
+
+        notificationsToCreate.push({
+          shipmentId: ms.shipmentId,
+          recipientPhone: ms.shipment.receiver.phone,
+          recipientName: ms.shipment.receiver.fullName,
+          channel: "SMS",
+          message: notifMessage,
+          deliveryStatus: "SENT",
+          sentAt: now,
+        });
+
+        notificationsToDispatch.push({
+          phone: ms.shipment.receiver.phone,
+          message: notifMessage,
+        });
+
+        statusHistoriesToCreate.push({
+          shipmentId: ms.shipmentId,
+          status: "ARRIVED_AT_DESTINATION",
+          branchId: manifest.destinationBranchId,
+          staffId: user.userId,
+          remarks: `Arrived and inspected at ${manifest.destinationBranch.name}. ${remarks || "Condition: Intact"}`,
+        });
+
+        statusHistoriesToCreate.push({
+          shipmentId: ms.shipmentId,
+          status: "READY_FOR_PICKUP",
+          branchId: manifest.destinationBranchId,
+          staffId: user.userId,
+          remarks: `Automated Arrival SMS dispatched to customer (${ms.shipment.receiver.phone}) with Secret Pickup PIN: ${pickupCode}`,
+        });
+      } else if (recStatus === "DAMAGED") {
+        shipmentUpdates.push({
+          where: { id: ms.shipmentId },
+          data: {
+            status: "ON_HOLD",
+            currentBranchId: manifest.destinationBranchId,
+          },
+        });
+
+        statusHistoriesToCreate.push({
+          shipmentId: ms.shipmentId,
+          status: "ON_HOLD",
+          branchId: manifest.destinationBranchId,
+          staffId: user.userId,
+          remarks: `⚠️ PARCEL DAMAGED: Arrived with damage at ${manifest.destinationBranch.name}. Placed on hold for inspection. Remarks: ${remarks || "No details provided"}`,
+        });
+      } else if (recStatus === "MISSING") {
+        shipmentUpdates.push({
+          where: { id: ms.shipmentId },
+          data: {
+            status: "ON_HOLD",
+          },
+        });
+
+        statusHistoriesToCreate.push({
+          shipmentId: ms.shipmentId,
+          status: "ON_HOLD",
+          branchId: manifest.destinationBranchId,
+          staffId: user.userId,
+          remarks: `🚨 PARCEL MISSING: Not found during arrival unloading of manifest ${manifest.manifestNumber}. Remarks: ${remarks || "Discrepancy noted"}`,
+        });
+      } else {
+        shipmentUpdates.push({
+          where: { id: ms.shipmentId },
+          data: {
+            status: "ON_HOLD",
+            currentBranchId: manifest.destinationBranchId,
+          },
+        });
+
+        statusHistoriesToCreate.push({
+          shipmentId: ms.shipmentId,
+          status: "ON_HOLD",
+          branchId: manifest.destinationBranchId,
+          staffId: user.userId,
+          remarks: `Parcel held on arrival: ${remarks || "Pending verification"}`,
+        });
+      }
+    }
+
+    const updated = await db.$transaction(
+      async (tx) => {
+        // 1. Parallel execution of ManifestShipment & Shipment updates
+        await Promise.all([
+          ...manifestShipmentUpdates.map((u) => tx.manifestShipment.update(u)),
+          ...shipmentUpdates.map((u) => tx.shipment.update(u)),
+        ]);
+
+        // 2. Batch creates
+        if (pickupVerificationsToCreate.length > 0) {
+          await tx.pickupVerification.createMany({
+            data: pickupVerificationsToCreate,
+          });
+        }
+
+        if (notificationsToCreate.length > 0) {
+          await tx.notification.createMany({
+            data: notificationsToCreate,
+          });
+        }
+
+        if (statusHistoriesToCreate.length > 0) {
+          await tx.shipmentStatusHistory.createMany({
+            data: statusHistoriesToCreate,
+          });
+        }
+
+        // 3. Update Manifest
+        const m = await tx.manifest.update({
+          where: { id: manifest.id },
+          data: {
+            status: "RECEIVED",
+            receivedAt: now,
+            receivedById: user.userId,
+            receivingRemarks: receivingRemarks?.trim() || "Manifest received and inspected.",
+          },
+        });
+
+        return m;
+      },
+      {
+        maxWait: 15000,
+        timeout: 60000,
+      }
+    );
 
     // 3. Dispatch Live Real-Time SMS via Termii
     const notificationsCount = notificationsToDispatch.length;

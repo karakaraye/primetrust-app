@@ -34,42 +34,51 @@ export async function POST(
       );
     }
 
-    const updated = await db.$transaction(async (tx) => {
-      // 1. Update Manifest
-      const m = await tx.manifest.update({
-        where: { id: manifest.id },
-        data: {
-          status: "IN_TRANSIT",
-          dispatchedAt: new Date(),
-          dispatchedById: user.userId,
-          driverName: body.driverName?.trim() || manifest.driverName,
-          vehicleReg: body.vehicleReg?.trim() || manifest.vehicleReg,
-          driverPhone: body.driverPhone?.trim() || manifest.driverPhone,
-        },
-      });
-
-      // 2. Update each shipment in manifest
-      for (const item of manifest.manifestShipments) {
-        await tx.shipment.update({
-          where: { id: item.shipmentId },
+    const updated = await db.$transaction(
+      async (tx) => {
+        // 1. Update Manifest
+        const m = await tx.manifest.update({
+          where: { id: manifest.id },
           data: {
             status: "IN_TRANSIT",
+            dispatchedAt: new Date(),
+            dispatchedById: user.userId,
+            driverName: body.driverName?.trim() || manifest.driverName,
+            vehicleReg: body.vehicleReg?.trim() || manifest.vehicleReg,
+            driverPhone: body.driverPhone?.trim() || manifest.driverPhone,
           },
         });
 
-        await tx.shipmentStatusHistory.create({
-          data: {
-            shipmentId: item.shipmentId,
+        // 2. Update each shipment in manifest
+        const shipmentIds = manifest.manifestShipments.map((item) => item.shipmentId);
+        if (shipmentIds.length > 0) {
+          await tx.shipment.updateMany({
+            where: { id: { in: shipmentIds } },
+            data: {
+              status: "IN_TRANSIT",
+            },
+          });
+
+          const histories = shipmentIds.map((shipmentId) => ({
+            shipmentId,
             status: "IN_TRANSIT",
             branchId: manifest.originBranchId,
             staffId: user.userId,
             remarks: `Dispatched from ${manifest.originBranch.name} to ${manifest.destinationBranch.name} on manifest ${manifest.manifestNumber}`,
-          },
-        });
-      }
+          }));
 
-      return m;
-    });
+          await tx.shipmentStatusHistory.createMany({
+            data: histories,
+          });
+        }
+
+        return m;
+      },
+      {
+        maxWait: 15000,
+        timeout: 60000,
+      }
+    );
 
     await logAudit({
       user,

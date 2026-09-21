@@ -24,33 +24,39 @@ export async function generateWaybillNumber(
   const prefix = `${companyCode}-${origin}-${dest}-${dateStr}`;
 
   // Atomic increment in SequenceCounter
-  const sequence = await db.$transaction(async (tx) => {
-    const existing = await tx.sequenceCounter.findUnique({
-      where: {
-        type_prefix: {
-          type: "WAYBILL",
-          prefix,
+  const sequence = await db.$transaction(
+    async (tx) => {
+      const existing = await tx.sequenceCounter.findUnique({
+        where: {
+          type_prefix: {
+            type: "WAYBILL",
+            prefix,
+          },
         },
-      },
-    });
+      });
 
-    if (existing) {
-      const updated = await tx.sequenceCounter.update({
-        where: { id: existing.id },
-        data: { currentNumber: { increment: 1 } },
-      });
-      return updated.currentNumber;
-    } else {
-      const created = await tx.sequenceCounter.create({
-        data: {
-          type: "WAYBILL",
-          prefix,
-          currentNumber: 1,
-        },
-      });
-      return created.currentNumber;
+      if (existing) {
+        const updated = await tx.sequenceCounter.update({
+          where: { id: existing.id },
+          data: { currentNumber: { increment: 1 } },
+        });
+        return updated.currentNumber;
+      } else {
+        const created = await tx.sequenceCounter.create({
+          data: {
+            type: "WAYBILL",
+            prefix,
+            currentNumber: 1,
+          },
+        });
+        return created.currentNumber;
+      }
+    },
+    {
+      maxWait: 10000,
+      timeout: 30000,
     }
-  });
+  );
 
   const paddedNumber = String(sequence).padStart(4, "0");
   return `${prefix}-${paddedNumber}`;
@@ -71,33 +77,39 @@ export async function generateManifestNumber(
 
   const prefix = `MAN-${origin}-${dest}-${dateStr}`;
 
-  const sequence = await db.$transaction(async (tx) => {
-    const existing = await tx.sequenceCounter.findUnique({
-      where: {
-        type_prefix: {
-          type: "MANIFEST",
-          prefix,
+  const sequence = await db.$transaction(
+    async (tx) => {
+      const existing = await tx.sequenceCounter.findUnique({
+        where: {
+          type_prefix: {
+            type: "MANIFEST",
+            prefix,
+          },
         },
-      },
-    });
+      });
 
-    if (existing) {
-      const updated = await tx.sequenceCounter.update({
-        where: { id: existing.id },
-        data: { currentNumber: { increment: 1 } },
-      });
-      return updated.currentNumber;
-    } else {
-      const created = await tx.sequenceCounter.create({
-        data: {
-          type: "MANIFEST",
-          prefix,
-          currentNumber: 1,
-        },
-      });
-      return created.currentNumber;
+      if (existing) {
+        const updated = await tx.sequenceCounter.update({
+          where: { id: existing.id },
+          data: { currentNumber: { increment: 1 } },
+        });
+        return updated.currentNumber;
+      } else {
+        const created = await tx.sequenceCounter.create({
+          data: {
+            type: "MANIFEST",
+            prefix,
+            currentNumber: 1,
+          },
+        });
+        return created.currentNumber;
+      }
+    },
+    {
+      maxWait: 10000,
+      timeout: 30000,
     }
-  });
+  );
 
   const paddedNumber = String(sequence).padStart(3, "0");
   return `${prefix}-${paddedNumber}`;

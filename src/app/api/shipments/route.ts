@@ -194,6 +194,10 @@ export async function POST(req: Request) {
       }
 
       return created;
+    },
+    {
+      maxWait: 15000,
+      timeout: 30000,
     });
 
     // 6. Audit Log
